@@ -1,0 +1,136 @@
+name: Build Taskora APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+
+      - name: Create lib folder and move main.dart
+        run: |
+          mkdir -p lib
+          if [ -f main.dart ]; then mv main.dart lib/main.dart; fi
+          mkdir -p android/app/src/main
+
+      - name: Create missing Flutter files
+        run: |
+          # android/build.gradle
+          mkdir -p android
+          cat > android/build.gradle << 'EOF'
+          buildscript {
+              ext.kotlin_version = '1.9.0'
+              repositories { google(); mavenCentral() }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.1.0'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
+          allprojects { repositories { google(); mavenCentral() } }
+          EOF
+
+          # android/settings.gradle
+          cat > android/settings.gradle << 'EOF'
+          include ':app'
+          def localPropertiesFile = new File(rootProject.projectDir, "local.properties")
+          def properties = new Properties()
+          assert localPropertiesFile.exists()
+          localPropertiesFile.withReader("UTF-8") { reader -> properties.load(reader) }
+          def flutterSdkPath = properties.getProperty("flutter.sdk")
+          assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
+          apply from: "$flutterSdkPath/packages/flutter_tools/gradle/app_plugin_loader.gradle"
+          EOF
+
+          # android/gradle.properties
+          cat > android/gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx4G
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
+
+          # android/app/build.gradle
+          mkdir -p android/app
+          cat > android/app/build.gradle << 'EOF'
+          def localProperties = new Properties()
+          def localPropertiesFile = rootProject.file('local.properties')
+          if (localPropertiesFile.exists()) {
+              localPropertiesFile.withReader('UTF-8') { reader -> localProperties.load(reader) }
+          }
+          def flutterRoot = localProperties.getProperty('flutter.sdk')
+          apply plugin: 'com.android.application'
+          apply plugin: 'kotlin-android'
+          apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+          android {
+              namespace "com.taskora.app"
+              compileSdkVersion 34
+              defaultConfig {
+                  applicationId "com.taskora.app"
+                  minSdkVersion 21
+                  targetSdkVersion 34
+                  versionCode 1
+                  versionName "1.0.0"
+              }
+              buildTypes {
+                  release { signingConfig signingConfigs.debug }
+              }
+          }
+          flutter { source '../..' }
+          dependencies { implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.0" }
+          EOF
+
+          # MainActivity.kt
+          mkdir -p android/app/src/main/kotlin/com/taskora/app
+          cat > android/app/src/main/kotlin/com/taskora/app/MainActivity.kt << 'EOF'
+          package com.taskora.app
+          import io.flutter.embedding.android.FlutterActivity
+          class MainActivity: FlutterActivity()
+          EOF
+
+          # res/values/styles.xml
+          mkdir -p android/app/src/main/res/values
+          cat > android/app/src/main/res/values/styles.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+                  <item name="android:windowBackground">@android:color/white</item>
+              </style>
+              <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+                  <item name="android:windowBackground">?android:colorBackground</item>
+              </style>
+          </resources>
+          EOF
+
+          # flutter project marker
+          cat > .metadata << 'EOF'
+          version:
+            revision: 3.19.0
+            channel: stable
+          project_type: app
+          EOF
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: Taskora-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
